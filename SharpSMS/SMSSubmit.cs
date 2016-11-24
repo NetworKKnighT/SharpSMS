@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Text;
 using System.IO;
 
 namespace SharpSMS
@@ -11,6 +10,7 @@ namespace SharpSMS
     public class SMSSubmit
     {
         #region Constants
+
         /// <summary>
         /// First Octet Bits 1,0 - SMS-SUBMIT
         /// </summary>
@@ -104,7 +104,7 @@ namespace SharpSMS
             this.ProtocolIdentifier = 0x00;
             this.MessageToSend = messageToSent;
 
-            this.Indication = new MessageIndication(MessageClass.MESpecific);           
+            this.Indication = new MessageIndication(MessageClass.MESpecific);
             this.Indication.Type = IndicationType.Voicemail;
             this.Indication.Operation = MessageIndicationOperation.NotSet;
             this.Indication.IsActive = false;
@@ -125,20 +125,20 @@ namespace SharpSMS
             switch (MessageToSend.DataEncoding)
             {
                 case DataEncoding.Default7bit:
-                    maxOctetsCount = 160;                   
+                    maxOctetsCount = 160;
                     break;
                 case DataEncoding.Data8bit:
-                    maxOctetsCount = 140;     // Might be lower, some roaming partners don't like it when set to 140              
+                    maxOctetsCount = 140; // Might be lower, some roaming partners don't like it when set to 140
                     break;
                 case DataEncoding.UCS2_16bit:
-                    maxOctetsCount = 140;                    
+                    maxOctetsCount = 140;
                     break;
                 default:
-                    maxOctetsCount = 140;                   
+                    maxOctetsCount = 140;
                     break;
             }
 
-            byte[] body = MessageToSend.GetSMSBytes();            
+            byte[] body = MessageToSend.GetSMSBytes();
             byte[] messageUdh = MessageToSend.GetUDHBytes();
             
             // If UDH exists then reserve one more byte for UDH length
@@ -174,9 +174,9 @@ namespace SharpSMS
 
                     // if it's not last message then
                     if (i < (parts - 1))
-                        bytesCount = maxOctetsCount - udhByteArray.Length - 1;                    
+                        bytesCount = maxOctetsCount - udhByteArray.Length - 1;
                     else
-                        bytesCount = body.Length - messagePos;                   
+                        bytesCount = body.Length - messagePos;
 
                     byte[] bodyPart = new byte[bytesCount];
                     Array.Copy(body, messagePos, bodyPart, 0, bytesCount);
@@ -230,7 +230,7 @@ namespace SharpSMS
         {
             switch (MessageToSend.DataEncoding)
             {
-                case DataEncoding.Default7bit:                    
+                case DataEncoding.Default7bit:
                     return OctetsToSeptets(messageData);
                 case DataEncoding.Data8bit:
                     return messageData;
@@ -245,33 +245,36 @@ namespace SharpSMS
         /// Method adds `Concat` information into the User Header
         /// </summary>
         /// <param name="udhStruct">stucture representing the </param>
-        /// <param name="messageUDH">message user header</param>        
+        /// <param name="messageUDH">message user header</param>
         private byte[] GetConcatPdu(ConcatedUDH udhStruct, byte[] messageUDH)
         {
-            MemoryStream stream = new MemoryStream();
+            const byte CONCATED_UDH_DATA_LENGTH = 0x06;
 
-            // If we have message for concating, write concating header
-            if (udhStruct.Parts > 1)
-            {                
-                MemoryStream concatHeader = new MemoryStream();
-                concatHeader.WriteByte(PDU_UDH_CONCATED_MESSAGE_16BIT);
-                concatHeader.WriteByte(PDU_UDH_CONCATED_MESSAGE_16BIT_HEADERLENGTH);
+            using (var stream = new MemoryStream())
+            {
+                // If we have message for concating, write concating header
+                if (udhStruct.Parts > 1)
+                {
+                    stream.WriteByte((byte)(CONCATED_UDH_DATA_LENGTH + messageUDH.Length));
 
-                concatHeader.WriteByte((byte)(udhStruct.Reference >> 8));
-                concatHeader.WriteByte((byte)udhStruct.Reference);
+                    stream.WriteByte(PDU_UDH_CONCATED_MESSAGE_16BIT);
+                    stream.WriteByte(PDU_UDH_CONCATED_MESSAGE_16BIT_HEADERLENGTH);
 
-                concatHeader.WriteByte(udhStruct.Parts);
-                concatHeader.WriteByte(udhStruct.Sequence);                
+                    stream.WriteByte((byte)(udhStruct.Reference >> 8));
+                    stream.WriteByte((byte)udhStruct.Reference);
 
-                stream.WriteByte((byte)(concatHeader.Length + messageUDH.Length));
-                concatHeader.WriteTo(stream);
+                    stream.WriteByte(udhStruct.Parts);
+                    stream.WriteByte(udhStruct.Sequence);
+                }
+                // if we have some messageuUDH, write the header length
+                else if (messageUDH.Length > 0)
+                {
+                    stream.WriteByte((byte)messageUDH.Length);
+                }
+
+                stream.Write(messageUDH, 0, messageUDH.Length);
+                return stream.ToArray();
             }
-            // if we have some messageuUDH, write the header length
-            else if (messageUDH.Length > 0)
-                stream.WriteByte((byte)messageUDH.Length);
-            
-            stream.Write(messageUDH, 0, messageUDH.Length);
-            return stream.ToArray();
         }
 
         /// <summary>
@@ -282,49 +285,46 @@ namespace SharpSMS
         /// <param name="hasCustomHeader">Does message have custom header inside</param>
         private byte[] GetPDUBytes(byte[] messageBody, int messageLength, bool hasCustomHeader)
         {
-            MemoryStream message = new MemoryStream();
+            using (var message = new MemoryStream())
+            {
+                byte[] header = GetPDUHeader(messageLength, hasCustomHeader);
 
-            byte[] header = GetPDUHeader(messageLength, hasCustomHeader);
+                message.Write(header, 0, header.Length);
+                message.Write(messageBody, 0, messageBody.Length);
 
-            message.Write(header, 0, header.Length);
-            message.Write(messageBody, 0, messageBody.Length);
-
-            byte[] messageBytes = message.ToArray();
-            message.Close();
-
-            return messageBytes;
+                return message.ToArray();
+            }
         }
 
         /// <summary>
         /// Returns PDU header of the text message.
         /// Including phone number and other flags
         /// </summary>
-        /// <param name="dataLength">lenght of data in message</param>   
+        /// <param name="dataLength">lenght of data in message</param>
         /// <param name="hasCustomHeader">Does message have custom header inside</param>
         private byte[] GetPDUHeader(int dataLength, bool hasCustomHeader)
         {
-            MemoryStream header = new MemoryStream();
-            header.WriteByte(0x00);  // Length of SMSC
-            // TP-MTI Message type
-            header.WriteByte(GetFirstOctet(hasCustomHeader));
-            header.WriteByte(this.MessageReference); // TP-MR Message Reference 
-                        
-            WritePhoneNumber(header, PhoneNumber);            
-            // TP-PID. Protocol identifier.
-            header.WriteByte(ProtocolIdentifier);
-            // TP-DCS Data coding scheme
-            header.WriteByte(this.Indication.ToByte(this.MessageToSend.DataEncoding));
+            using (var header = new MemoryStream())
+            {
+                header.WriteByte(0x00); // Length of SMSC
+                // TP-MTI Message type
+                header.WriteByte(GetFirstOctet(hasCustomHeader));
+                header.WriteByte(this.MessageReference); // TP-MR Message Reference
 
-            // TP-SCTS. Time stamp (semi-octets)
-            if (ValidityPeriod > TimeSpan.MinValue)
-                header.WriteByte(GetValidityPeriod());
-                        
-            header.WriteByte((byte)(dataLength));  // +1 is to count also this byte
-            
-            byte[] headerBytes = header.ToArray();
-            header.Close();
+                WritePhoneNumber(header, PhoneNumber);
+                // TP-PID. Protocol identifier.
+                header.WriteByte(ProtocolIdentifier);
+                // TP-DCS Data coding scheme
+                header.WriteByte(this.Indication.ToByte(this.MessageToSend.DataEncoding));
 
-            return headerBytes;            
+                // TP-SCTS. Time stamp (semi-octets)
+                if (ValidityPeriod > TimeSpan.MinValue)
+                    header.WriteByte(GetValidityPeriod());
+
+                header.WriteByte((byte)(dataLength)); // +1 is to count also this byte
+
+                return header.ToArray();
+            }            
         }
 
         /// <summary>
@@ -377,8 +377,8 @@ namespace SharpSMS
         /// Writes phone in PDU format
         /// </summary>
         /// <param name="stream">Destination stream</param>
-        /// <param name="phoneNumber">Phone number to write</param>        
-        private void WritePhoneNumber(MemoryStream stream, string phoneNumber)
+        /// <param name="phoneNumber">Phone number to write</param>
+        private static void WritePhoneNumber(MemoryStream stream, string phoneNumber)
         {
             if (string.IsNullOrEmpty(phoneNumber))
                 throw new ArgumentException("Phone number is not set");
@@ -400,11 +400,11 @@ namespace SharpSMS
         }
 
         /// <summary>
-        /// Encodes phone number into BCD.        
+        /// Encodes phone number into BCD.
         /// </summary>
         /// <param name="stream">Destination stream</param>
-        /// <param name="phoneNumber">Phone number to write</param>        
-        private void WriteBcdNumber(MemoryStream stream, string phoneNumber)
+        /// <param name="phoneNumber">Phone number to write</param>
+        private static void WriteBcdNumber(MemoryStream stream, string phoneNumber)
         {
             int bcd = 0x00;
             int n = 0;
@@ -483,7 +483,7 @@ namespace SharpSMS
         /// Converts array of characters into septets
         /// </summary>
         /// <param name="octetsArray">Array of octets</param>
-        private byte[] OctetsToSeptets(byte[] octetsArray)
+        private static byte[] OctetsToSeptets(byte[] octetsArray)
         {
             int arrayLength = octetsArray.Length;
             // Extend octets array with byte
@@ -492,39 +492,40 @@ namespace SharpSMS
 
             arrayLength = workingArray.Length;
 
-            MemoryStream octets = new MemoryStream();
-
-            for (int i = 0; i < arrayLength; ++i)
+            using (var octets = new MemoryStream())
             {
-                int m = i % 8;
-                if (m != 7)
+                for (int i = 0; i < arrayLength; ++i)
                 {
-                    int n;
-                    if (i == arrayLength - 1)
-                        n = 0 & PowSum(0, m);
-                    else
+                    int m = i % 8;
+                    if (m != 7)
                     {
-                        n = workingArray[i + 1] & PowSum(0, m);
-                        workingArray[i + 1] -= (byte)n;
+                        int n;
+                        if (i == arrayLength - 1)
+                            n = 0 & PowSum(0, m);
+                        else
+                        {
+                            n = workingArray[i + 1] & PowSum(0, m);
+                            workingArray[i + 1] -= (byte)n;
+                        }
+
+                        workingArray[i] /= (byte)Math.Pow(2, m);
+                        workingArray[i] += (byte)(Math.Pow(2, 7 - m) * n);
+
+                        // We dont want the last 0x00 byte to be added
+                        if ((arrayLength - i) > 1)
+                            octets.WriteByte(workingArray[i]);
                     }
-
-                    workingArray[i] /= (byte)Math.Pow(2, m);
-                    workingArray[i] += (byte)(Math.Pow(2, 7 - m) * n);
-
-                    // We dont want the last 0x00 byte to be added
-                    if ((arrayLength - i) > 1)
-                        octets.WriteByte(workingArray[i]);
                 }
-            }
 
-            return octets.ToArray();
+                return octets.ToArray();
+            }
         }
 
         /// <summary>
         /// Sum POW(2, i), where i goes through 0 to n.
         /// </summary>
         /// <param name="startBit">Start bit</param>
-        /// <param name="n">Number of bits</param>        
+        /// <param name="n">Number of bits</param>
         private static int PowSum(int startBit, int n)
         {
             int sum = 0;
